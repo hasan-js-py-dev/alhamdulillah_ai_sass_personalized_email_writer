@@ -64,6 +64,7 @@ jobsRouter.post(
 						const email = columnMap.email ? row[columnMap.email] : '';
 						const company = columnMap.company ? row[columnMap.company] : '';
 						const websiteRaw = columnMap.website ? withHttps(row[columnMap.website]) : '';
+						const activityContext = columnMap.activityContext ? row[columnMap.activityContext] : '';
 						const normalized = normalizeWebsiteInput(websiteRaw);
 						const website = normalized.ok ? normalized.homepageUrl : '';
 						const ourServices = columnMap.ourServices ? row[columnMap.ourServices] : '';
@@ -71,7 +72,7 @@ jobsRouter.post(
 						await db.run(
 							`INSERT INTO prospects (
 								user_id, file_id, job_id, row_index, status,
-								first_name, last_name, email, company, website, our_services,
+								first_name, last_name, email, company, website, activity_context, our_services,
 								original_row_json
 							) VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?)` ,
 							DEFAULT_USER_ID,
@@ -83,6 +84,7 @@ jobsRouter.post(
 							String(email || ''),
 							String(company || ''),
 							String(website || ''),
+							String(activityContext || ''),
 							String(ourServices || ''),
 							JSON.stringify(row)
 						);

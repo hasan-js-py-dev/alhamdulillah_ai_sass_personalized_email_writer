@@ -30,6 +30,7 @@ async function processProspectRow(prospectId) {
 
 	try {
 		const websiteInput = String(prospect.website || '').trim();
+		const activityContext = String(prospect.activity_context || '').trim();
 		const normalized = normalizeWebsiteInput(websiteInput);
 		const homepageUrl = normalized.ok ? normalized.homepageUrl : '';
 
@@ -43,12 +44,21 @@ async function processProspectRow(prospectId) {
 			}
 		}
 
+		let mergedContext = '';
+		if (activityContext && scraped) {
+			mergedContext = `${activityContext}\n\nWebsite insights:\n${scraped}`.trim();
+		} else if (activityContext) {
+			mergedContext = activityContext;
+		} else {
+			mergedContext = scraped;
+		}
+
 		const prompt = buildDeepSeekPrompt({
 			firstName: prospect.first_name,
 			lastName: prospect.last_name,
 			company: prospect.company,
 			website: homepageUrl || websiteInput,
-			scrapedContent: scraped,
+			scrapedContent: mergedContext,
 			serviceFocus: prospect.our_services,
 		});
 
@@ -77,7 +87,7 @@ async function processProspectRow(prospectId) {
 
 		await db.run(
 			"UPDATE prospects SET status='completed', error=NULL, scraped_content=?, subject=?, opening_line=?, email_body=?, cta=?, updated_at=datetime('now') WHERE id=?",
-			scraped,
+			mergedContext,
 			subject,
 			openingLine,
 			emailBody,

@@ -80,6 +80,7 @@ async function initDb() {
 			email TEXT,
 			company TEXT,
 			website TEXT,
+			activity_context TEXT,
 			our_services TEXT,
 			original_row_json TEXT NOT NULL,
 			scraped_content TEXT,
@@ -99,6 +100,17 @@ async function initDb() {
 		CREATE INDEX IF NOT EXISTS idx_prospects_job ON prospects(job_id);
 		CREATE INDEX IF NOT EXISTS idx_prospects_status ON prospects(status);
 	`);
+
+	// Lightweight migrations (SQLite): add new columns if missing.
+	try {
+		const cols = await db.all(`PRAGMA table_info('prospects')`);
+		const names = new Set(cols.map((c) => String(c.name)));
+		if (!names.has('activity_context')) {
+			await db.exec(`ALTER TABLE prospects ADD COLUMN activity_context TEXT`);
+		}
+	} catch {
+		// Best-effort: don't block startup if migration check fails.
+	}
 
 	// Single-tenant / no-auth MVP: ensure an implicit default user exists.
 	await db.run(

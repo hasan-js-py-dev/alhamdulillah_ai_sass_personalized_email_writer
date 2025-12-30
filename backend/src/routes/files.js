@@ -4,6 +4,7 @@ const path = require('path');
 
 const express = require('express');
 const multer = require('multer');
+const XLSX = require('xlsx');
 
 const { asyncHandler } = require('../util/async-handler');
 const { HttpError } = require('../util/http-error');
@@ -46,18 +47,31 @@ const upload = multer({
 	storage: createStorage(),
 	limits: { fileSize: config.maxUploadBytes },
 	fileFilter: (_req, file, cb) => {
+		const name = String(file.originalname || '').toLowerCase();
 		const ok =
-			(file.mimetype && file.mimetype.includes('csv')) ||
-			String(file.originalname || '').toLowerCase().endsWith('.csv');
-		if (!ok) return cb(new HttpError(400, 'Only CSV uploads are supported'));
+			name.endsWith('.csv') ||
+			name.endsWith('.xlsx') ||
+			name.endsWith('.xls') ||
+			(file.mimetype && (file.mimetype.includes('csv') || file.mimetype.includes('spreadsheet') || file.mimetype.includes('excel')));
+		if (!ok) return cb(new HttpError(400, 'Only CSV or Excel uploads are supported (.csv, .xlsx, .xls)'));
 		return cb(null, true);
 	},
 });
 
-async function parseCsvPreview(filePath, maxRows = 20) {
+function isBlank(v) {
+	return String(v || '').trim().length === 0;
+}
+
+function extOf(name) {
+	return String(path.extname(name || '') || '').toLowerCase();
+}
+
+async function parseCsvRows(filePath, maxRowsForPreview = 20) {
 	return new Promise((resolve, reject) => {
-		const rows = [];
+		const previewRows = [];
 		let headers = null;
+		let allRowsCount = 0;
+		let firstRowWithError = null;
 
 		fs.createReadStream(filePath)
 			.pipe(csvParser())
@@ -65,11 +79,94 @@ async function parseCsvPreview(filePath, maxRows = 20) {
 				headers = h;
 			})
 			.on('data', (row) => {
-				if (rows.length < maxRows) rows.push(row);
+				allRowsCount++;
+				if (previewRows.length < maxRowsForPreview) previewRows.push(row);
+				if (!firstRowWithError) {
+					// firstRowWithError is set later after we know column map
+				}
 			})
 			.on('error', (err) => reject(err))
-			.on('end', () => resolve({ headers: headers || [], rows }));
+			.on('end', () => resolve({ headers: headers || [], previewRows, totalRows: allRowsCount }));
 	});
+}
+
+function parseExcel(filePath, maxRowsForPreview = 20) {
+	const wb = XLSX.readFile(filePath, { cellDates: true });
+	const sheetName = wb.SheetNames && wb.SheetNames.length ? wb.SheetNames[0] : null;
+	if (!sheetName) return { headers: [], rows: [], previewRows: [], totalRows: 0 };
+	const ws = wb.Sheets[sheetName];
+	// rows as arrays so we can preserve empty cells
+	const matrix = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, blankrows: false, defval: '' });
+	if (!Array.isArray(matrix) || matrix.length === 0) return { headers: [], rows: [], previewRows: [], totalRows: 0 };
+	const headers = (matrix[0] || []).map((h) => String(h || '').trim()).filter(Boolean);
+	const dataRows = matrix.slice(1);
+	const rows = dataRows.map((arr) => {
+		const obj = {};
+		for (let i = 0; i < headers.length; i++) {
+			obj[headers[i]] = String((arr && arr[i] != null) ? arr[i] : '').trim();
+		}
+		return obj;
+	});
+	return {
+		headers,
+		rows,
+		previewRows: rows.slice(0, maxRowsForPreview),
+		totalRows: rows.length,
+	};
+}
+
+function validateRows({ rows, columnMap }) {
+	const errors = [];
+	const fnCol = columnMap.firstName;
+	const lnCol = columnMap.lastName;
+	const companyCol = columnMap.company;
+	const websiteCol = columnMap.website;
+	const activityCol = columnMap.activityContext;
+
+	for (let i = 0; i < rows.length; i++) {
+		const row = rows[i] || {};
+		const firstName = fnCol ? row[fnCol] : '';
+		const lastName = lnCol ? row[lnCol] : '';
+		const company = companyCol ? row[companyCol] : '';
+		const website = websiteCol ? row[websiteCol] : '';
+		const activity = activityCol ? row[activityCol] : '';
+
+		const missingRequired = [];
+		if (isBlank(firstName)) missingRequired.push('First Name');
+		if (isBlank(lastName)) missingRequired.push('Last Name');
+		if (isBlank(company)) missingRequired.push('Company');
+
+		const hasEither = !isBlank(website) || !isBlank(activity);
+		if (missingRequired.length || !hasEither) {
+			errors.push({
+				rowIndex: i + 2, // +1 header +1 1-based
+				missingRequired,
+				hasEither,
+			});
+			if (errors.length >= 5) break;
+		}
+	}
+
+	return errors;
+}
+
+function buildSampleRows() {
+	return [
+		{
+			'First Name': 'Sarah',
+			'Last Name': 'Khan',
+			Company: 'Acme Corp',
+			'Website / Activity URL': 'https://example.com/blog/product-launch',
+			'Activity Context': '',
+		},
+		{
+			'First Name': 'Omar',
+			'Last Name': 'Ali',
+			Company: 'Beta Systems',
+			'Website / Activity URL': '',
+			'Activity Context': 'Posted about hiring SDRs and expanding outbound. New RevOps role open.',
+		},
+	];
 }
 
 filesRouter.post(
@@ -78,19 +175,89 @@ filesRouter.post(
 	asyncHandler(async (req, res) => {
 		if (!req.file) throw new HttpError(400, 'Missing file');
 
-		const { headers, rows } = await parseCsvPreview(req.file.path, 20);
-		if (!headers.length) {
+		const originalName = String(req.file.originalname || '');
+		const ext = extOf(originalName);
+
+		let headers = [];
+		let previewRows = [];
+		let totalRows = 0;
+		let storedPath = req.file.path;
+
+		if (ext === '.csv') {
+			const parsed = await parseCsvRows(req.file.path, 20);
+			headers = parsed.headers;
+			previewRows = parsed.previewRows;
+			totalRows = parsed.totalRows;
+		} else if (ext === '.xlsx' || ext === '.xls') {
+			const parsed = parseExcel(req.file.path, 20);
+			headers = parsed.headers;
+			previewRows = parsed.previewRows;
+			totalRows = parsed.totalRows;
+
+			// Convert Excel to CSV on disk so the rest of the pipeline can stay CSV-based.
+			const wb = XLSX.readFile(req.file.path, { cellDates: true });
+			const sheetName = wb.SheetNames && wb.SheetNames.length ? wb.SheetNames[0] : null;
+			if (!sheetName) {
+				fs.unlinkSync(req.file.path);
+				throw new HttpError(400, 'Excel file appears to have no sheets');
+			}
+			const ws = wb.Sheets[sheetName];
+			const csv = XLSX.utils.sheet_to_csv(ws);
+			const csvPath = req.file.path.replace(/\.(xlsx|xls)$/i, '.csv');
+			fs.writeFileSync(csvPath, csv, 'utf8');
 			fs.unlinkSync(req.file.path);
-			throw new HttpError(400, 'CSV appears to have no header row');
+			storedPath = csvPath;
+		} else {
+			fs.unlinkSync(req.file.path);
+			throw new HttpError(400, 'Unsupported file type');
+		}
+
+		if (!headers.length) {
+			if (fs.existsSync(storedPath)) fs.unlinkSync(storedPath);
+			throw new HttpError(400, 'File appears to have no header row');
 		}
 
 		const columnMap = deriveColumnMap(headers);
 		const missing = validateRequiredColumns(columnMap);
 		if (missing.length) {
-			fs.unlinkSync(req.file.path);
+			if (fs.existsSync(storedPath)) fs.unlinkSync(storedPath);
 			throw new HttpError(
 				400,
-				`Missing required columns: ${missing.join(', ')}. Expected headers like First Name, Last Name, Email, Company, Website.`,
+				`Missing required columns: ${missing.join(', ')}. Expected headers like First Name, Last Name, Company.`,
+				{ expose: true }
+			);
+		}
+
+		// Per-row validation for required values + either/or rule.
+		let rowsForValidation = previewRows;
+		if (totalRows > previewRows.length) {
+			// For CSV storedPath, stream and validate all rows (file sizes are expected to be small in this MVP).
+			if (ext === '.csv' || storedPath.toLowerCase().endsWith('.csv')) {
+				rowsForValidation = [];
+				await new Promise((resolve, reject) => {
+					fs.createReadStream(storedPath)
+						.pipe(csvParser())
+						.on('data', (row) => rowsForValidation.push(row))
+						.on('error', (err) => reject(err))
+						.on('end', () => resolve());
+				});
+			}
+		}
+
+		const rowErrors = validateRows({ rows: rowsForValidation, columnMap });
+		if (rowErrors.length) {
+			if (fs.existsSync(storedPath)) fs.unlinkSync(storedPath);
+			const first = rowErrors[0];
+			const details = [];
+			if (first.missingRequired && first.missingRequired.length) {
+				details.push(`missing required values: ${first.missingRequired.join(', ')}`);
+			}
+			if (!first.hasEither) {
+				details.push('must include either Website / Activity URL OR Activity Context');
+			}
+			throw new HttpError(
+				400,
+				`Row validation failed at row ${first.rowIndex}: ${details.join('; ')}.`,
 				{ expose: true }
 			);
 		}
@@ -100,7 +267,7 @@ filesRouter.post(
 			'INSERT INTO files (user_id, original_filename, stored_path, header_json, column_map_json) VALUES (?, ?, ?, ?, ?)',
 			DEFAULT_USER_ID,
 			safeFileNamePart(req.file.originalname),
-			req.file.path,
+			storedPath,
 			JSON.stringify(headers),
 			JSON.stringify(columnMap)
 		);
@@ -112,8 +279,52 @@ filesRouter.post(
 				headers,
 				columnMap,
 			},
-			preview: rows,
+			preview: previewRows,
 		});
+	})
+);
+
+filesRouter.get(
+	'/sample',
+	asyncHandler(async (req, res) => {
+		const format = String(req.query.format || 'csv').toLowerCase();
+		const rows = buildSampleRows();
+		const headers = Object.keys(rows[0] || {
+			'First Name': '',
+			'Last Name': '',
+			Company: '',
+			'Website / Activity URL': '',
+			'Activity Context': '',
+		});
+
+		if (format === 'xlsx') {
+			const ws = XLSX.utils.json_to_sheet(rows, { header: headers });
+			const wb = XLSX.utils.book_new();
+			XLSX.utils.book_append_sheet(wb, ws, 'Prospects');
+			const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'buffer' });
+			res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+			res.setHeader('Content-Disposition', 'attachment; filename="sample_upload.xlsx"');
+			return res.send(buf);
+		}
+
+		// Default: CSV
+		const lines = [headers.join(',')]
+			.concat(
+				rows.map((r) =>
+					headers
+						.map((h) => {
+							const v = String((r && r[h]) || '');
+							const escaped = v.replace(/"/g, '""');
+							return /[",\n]/.test(escaped) ? `"${escaped}"` : escaped;
+						})
+						.join(',')
+				)
+			)
+			.join('\n');
+
+		res.setHeader('Content-Type', 'text/csv');
+		res.setHeader('Content-Disposition', 'attachment; filename="sample_upload.csv"');
+		return res.send(lines);
 	})
 );
 

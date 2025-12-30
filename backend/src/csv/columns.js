@@ -26,24 +26,34 @@ function findColumn(headers, candidates) {
 function deriveColumnMap(headers) {
 	const firstName = findColumn(headers, ['first name', 'firstname', 'first']);
 	const lastName = findColumn(headers, ['last name', 'lastname', 'last']);
-	const email = findColumn(headers, ['email', 'email address']);
 	const company = findColumn(headers, ['company', 'company name', 'organization', 'business']);
-	const website = findColumn(headers, ['website', 'website url', 'url', 'site', 'domain']);
+	const website = findColumn(headers, [
+		'website / activity url',
+		'website or activity url',
+		'website',
+		'website url',
+		'url',
+		'site',
+		'domain',
+	]);
+	const activityContext = findColumn(headers, ['activity context', 'context', 'activity', 'notes', 'personalization context']);
+	const email = findColumn(headers, ['email', 'email address']);
 	const ourServices = findColumn(headers, ['our services', 'services', 'service focus', 'service_focus']);
 
 	return {
 		firstName,
 		lastName,
-		email,
 		company,
 		website,
+		activityContext,
+		email,
 		ourServices,
 	};
 }
 
 function validateRequiredColumns(columnMap) {
 	const missing = [];
-	for (const key of ['firstName', 'lastName', 'email', 'company', 'website']) {
+	for (const key of ['firstName', 'lastName', 'company']) {
 		if (!columnMap[key]) missing.push(key);
 	}
 	return missing;
