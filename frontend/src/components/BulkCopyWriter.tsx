@@ -98,6 +98,30 @@ function getToneBestFor(toneName: ToneType) {
   return bestFor[toneName] || 'Best for: choose what matches your voice.';
 }
 
+function getToneServiceFit(toneName: ToneType) {
+  const serviceFit: Record<ToneType, string> = {
+    'Professional/Respectful/Formal': 'Enterprise SaaS, finance, legal, IT/security, B2B procurement.',
+    'Friendly & Conversational': 'Agencies, consultants, B2B SaaS, outbound for most services.',
+    'Casual': 'Creators, community-led brands, partners, warm intros.',
+    'Humorous/Playful/Funny': 'Marketing/design studios, DTC, content brands (brand-safe only).',
+    'Empathetic/Supportive/Sympathetic': 'Healthcare, HR/recruiting, customer success, sensitive situations.',
+    'Casual-Respectful': 'Local services, web/dev shops, B2B services to new prospects.',
+    'Concise/Direct': 'Dev tools, operators/execs, RevOps, high-volume outbound.',
+    'Decisive/Authoritative': 'Project-based services, audits, compliance, time-sensitive offers.',
+    'Cheerful/Enthusiastic/Joyful': 'Events, launches, communities, partnerships, creator-led brands.',
+    'Encouraging/Inspiring': 'Coaching, education, wellness, community programs.',
+    'Persuasive': 'Lead-gen services, performance marketing, sales-led offers.',
+    'Informative': 'Onboarding, product updates, technical services, explainers.',
+    'Warm & Welcoming': 'Hospitality, consumer services, relationship-led outbound.',
+    'Optimistic': 'Startups, innovation-led teams, new initiatives.',
+    'Authoritative': 'Strategy/consulting, technical experts, founders, thought leadership.',
+    'Conversational': 'Most B2B services, founders, agencies—when you want “human”.',
+    'Urgent': 'Promos, deadlines, renewals, last-call scheduling (use sparingly).',
+  };
+
+  return serviceFit[toneName] || 'Most B2B services—pick what matches your brand.';
+}
+
 export function BulkCopyWriter() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -112,6 +136,7 @@ export function BulkCopyWriter() {
     [formData.tone]
   );
   const selectedToneBestFor = formData.tone ? getToneBestFor(formData.tone as ToneType) : '';
+  const selectedToneServiceFit = formData.tone ? getToneServiceFit(formData.tone as ToneType) : '';
 
   const isCustomLengthValid = formData.length !== 'Custom' || (!isBlank(formData.customLength) && Number(formData.customLength) > 0);
   const validation = {
@@ -364,6 +389,9 @@ export function BulkCopyWriter() {
                   </span>
                 </p>
                 <p className="text-sm text-warm-gray-light leading-relaxed mt-2">{selectedTone.description}</p>
+                <p className="text-sm text-warm-gray-light leading-relaxed mt-2">
+                  <span className="font-semibold text-warm-gray">Service fit:</span> {selectedToneServiceFit}
+                </p>
               </div>
             )}
           </div>
