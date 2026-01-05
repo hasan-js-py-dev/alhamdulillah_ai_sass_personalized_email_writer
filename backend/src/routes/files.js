@@ -66,6 +66,34 @@ function extOf(name) {
 	return String(path.extname(name || '') || '').toLowerCase();
 }
 
+function normalizeHeaderKey(header) {
+	return String(header || '').replace(/^\uFEFF/, '').trim();
+}
+
+function makeUniqueHeaders(headers) {
+	const used = new Map();
+	return headers.map((h, idx) => {
+		let base = normalizeHeaderKey(h);
+		if (!base) base = `__col_${idx + 1}`;
+		const count = (used.get(base) || 0) + 1;
+		used.set(base, count);
+		return count === 1 ? base : `${base}_${count}`;
+	});
+}
+
+function csvParserWithNormalizedHeaders() {
+	const used = new Map();
+	return csvParser({
+		mapHeaders: ({ header, index }) => {
+			let base = normalizeHeaderKey(header);
+			if (!base) base = `__col_${Number(index) + 1}`;
+			const count = (used.get(base) || 0) + 1;
+			used.set(base, count);
+			return count === 1 ? base : `${base}_${count}`;
+		},
+	});
+}
+
 async function parseCsvRows(filePath, maxRowsForPreview = 20) {
 	return new Promise((resolve, reject) => {
 		const previewRows = [];
@@ -74,7 +102,7 @@ async function parseCsvRows(filePath, maxRowsForPreview = 20) {
 		let firstRowWithError = null;
 
 		fs.createReadStream(filePath)
-			.pipe(csvParser())
+			.pipe(csvParserWithNormalizedHeaders())
 			.on('headers', (h) => {
 				headers = h;
 			})
@@ -98,12 +126,13 @@ function parseExcel(filePath, maxRowsForPreview = 20) {
 	// rows as arrays so we can preserve empty cells
 	const matrix = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, blankrows: false, defval: '' });
 	if (!Array.isArray(matrix) || matrix.length === 0) return { headers: [], rows: [], previewRows: [], totalRows: 0 };
-	const headers = (matrix[0] || []).map((h) => String(h || '').trim()).filter(Boolean);
+	const rawHeaders = (matrix[0] || []).map((h) => String(h || ''));
+	const headers = makeUniqueHeaders(rawHeaders);
 	const dataRows = matrix.slice(1);
 	const rows = dataRows.map((arr) => {
 		const obj = {};
 		for (let i = 0; i < headers.length; i++) {
-			obj[headers[i]] = String((arr && arr[i] != null) ? arr[i] : '').trim();
+			obj[headers[i]] = String(arr && arr[i] != null ? arr[i] : '').trim();
 		}
 		return obj;
 	});
@@ -132,8 +161,7 @@ function validateRows({ rows, columnMap }) {
 		const activity = activityCol ? row[activityCol] : '';
 
 		const missingRequired = [];
-		if (isBlank(firstName)) missingRequired.push('First Name');
-		if (isBlank(lastName)) missingRequired.push('Last Name');
+		// Names are optional (we can fall back to "Hi,")
 		if (isBlank(company)) missingRequired.push('Company');
 
 		let hasContext = true;
@@ -231,15 +259,13 @@ filesRouter.post(
 			if (fs.existsSync(storedPath)) fs.unlinkSync(storedPath);
 
 			const pretty = {
-				firstName: 'First Name',
-				lastName: 'Last Name',
 				company: 'Company',
 				websiteOrActivityContext: 'Website / Activity URL or Activity Context',
 			};
 			const missingPretty = missing.map((k) => pretty[k] || k);
 			throw new HttpError(
 				400,
-				`Missing required columns: ${missingPretty.join(', ')}. Required: First Name, Last Name, Company, and at least one of Website / Activity URL or Activity Context.`,
+				`Missing required columns: ${missingPretty.join(', ')}. Required: Company and at least one of Website / Activity URL or Activity Context.`,
 				{ expose: true }
 			);
 		}
@@ -252,7 +278,7 @@ filesRouter.post(
 				rowsForValidation = [];
 				await new Promise((resolve, reject) => {
 					fs.createReadStream(storedPath)
-						.pipe(csvParser())
+							.pipe(csvParserWithNormalizedHeaders())
 						.on('data', (row) => rowsForValidation.push(row))
 						.on('error', (err) => reject(err))
 						.on('end', () => resolve());
@@ -271,10 +297,31 @@ filesRouter.post(
 			if (first.missingContext) {
 				details.push('must include either Website / Activity URL OR Activity Context');
 			}
+
+			// Add debug context to make CSV issues actionable (header mismatches, empty cells, etc.).
+			const mapped = {
+				firstName: columnMap.firstName || null,
+				lastName: columnMap.lastName || null,
+				company: columnMap.company || null,
+				website: columnMap.website || null,
+				activityContext: columnMap.activityContext || null,
+				email: columnMap.email || null,
+				job_title: columnMap.jobTitle || null,
+			};
+			const idx0 = Math.max(0, Number(first.rowIndex || 2) - 2);
+			const badRow = rowsForValidation && rowsForValidation[idx0] ? rowsForValidation[idx0] : {};
+			const sample = {
+				first_name: mapped.firstName ? String(badRow[mapped.firstName] || '') : '',
+				last_name: mapped.lastName ? String(badRow[mapped.lastName] || '') : '',
+				company: mapped.company ? String(badRow[mapped.company] || '') : '',
+				website: mapped.website ? String(badRow[mapped.website] || '') : '',
+				activity_context: mapped.activityContext ? String(badRow[mapped.activityContext] || '') : '',
+				email: mapped.email ? String(badRow[mapped.email] || '') : '',
+			};
 			throw new HttpError(
 				400,
 				`Row validation failed at row ${first.rowIndex}: ${details.join('; ')}.`,
-				{ expose: true }
+				{ expose: true, details: { mappedHeaders: mapped, sampleRow: sample } }
 			);
 		}
 

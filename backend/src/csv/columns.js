@@ -1,8 +1,11 @@
 function normalizeHeader(header) {
 	return String(header || '')
+		.replace(/^\uFEFF/, '') // strip BOM if present
 		.trim()
 		.toLowerCase()
-		.replace(/\s+/g, ' ');
+		.replace(/[_\s]+/g, ' ')
+		.replace(/\s+/g, ' ')
+		.trim();
 }
 
 function findColumn(headers, candidates) {
@@ -38,6 +41,7 @@ function deriveColumnMap(headers) {
 	]);
 	const activityContext = findColumn(headers, ['activity context', 'context', 'activity', 'notes', 'personalization context']);
 	const email = findColumn(headers, ['email', 'email address']);
+	const jobTitle = findColumn(headers, ['job title', 'job_title', 'title', 'role', 'position']);
 	const ourServices = findColumn(headers, ['our services', 'services', 'service focus', 'service_focus']);
 
 	return {
@@ -47,15 +51,15 @@ function deriveColumnMap(headers) {
 		website,
 		activityContext,
 		email,
+		jobTitle,
 		ourServices,
 	};
 }
 
 function validateRequiredColumns(columnMap) {
 	const missing = [];
-	for (const key of ['firstName', 'lastName', 'company']) {
-		if (!columnMap[key]) missing.push(key);
-	}
+	// Names are optional (we can fall back to "Hi,"), but Company is required.
+	if (!columnMap.company) missing.push('company');
 
 	// At least one of these columns must exist.
 	if (!columnMap.website && !columnMap.activityContext) {
